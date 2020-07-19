@@ -14,6 +14,7 @@ class News:
         self.breaking = "No"
         self.headline = ""
         self.time_stamp = ""
+        self.source = ""
         self.source_url = ""
         self.story = ""
 
@@ -22,7 +23,8 @@ class News:
             "breaking_news": self.breaking,
             "headline": self.headline.replace("'", "<ap>"),
             "time": self.time_stamp,
-            "source": self.source_url,
+            "source": self.source,
+            "source url": self.source_url,
             "story": self.story.replace("'", "<ap>")
         }
 
@@ -38,7 +40,7 @@ class NewsTicker:
         try:
             news.breaking = news_data["breaking_news"]
         except:
-            news.breaking = "No"
+            news.breaking = "no"
 
         try:
             news.headline = news_data["headline"]
@@ -51,7 +53,12 @@ class NewsTicker:
             news.time_stamp = dt.now().strftime('%I:%M %p')
         
         try:
-            news.source_url = news_data["source"]
+            news.source = news_data["source"]
+        except:
+            pass
+        
+        try:
+            news.source_url = news_data["source url"]
         except:
             pass
 
@@ -65,36 +72,46 @@ class NewsTicker:
     def count(self):
         return len(self.news)
 
-    def breaking_news_daemon(self):
-        while True:
-            # connect to CNN website
-            cnn_soup, cnn_url = self.connect()
-            breaking_news_thread = Thread(target=self.scrape_breaking_news, args=(cnn_soup, cnn_url,))
-            breaking_news_thread.setDaemon(True)
-            breaking_news_thread.start()
-            time.sleep(TIME_FOR_BREAKING_NEWS)
+    def run_breaking_news_daemon(self):
+        def _breaking_news_daemon():
+            while True:
+                # connect to CNN website
+                cnn_soup, cnn_url = self.connect()
+                breaking_news_thread = Thread(target=self.scrape_breaking_news, args=(cnn_soup, cnn_url,))
+                breaking_news_thread.setDaemon(True)
+                breaking_news_thread.start()
+                time.sleep(TIME_FOR_BREAKING_NEWS)
 
-    def breaking_news_watch(self):
+        # daemon thread to check breaking news from time to time
+        breaking_news_thread = Thread(target=_breaking_news_daemon)
+        breaking_news_thread.setDaemon(True)
+        breaking_news_thread.start()
+
+    def check_breaking_news(self):
         return len(self.breaking_news_update) > 0
 
+    def check_latest_news(self):
+        return len(self.news) > 0
+
     def scrape_breaking_news(self, cnn_soup, base_url):
-        temp = []
+        breaking_news_headlines = []
         try:
             cnn_breaking_news = cnn_soup.find_all("div", { "class": "breaking-news-content runtext-container"})
             
             for news in cnn_breaking_news:
                 headline = news.find("a").text.strip()
-                news_data = {"breaking_news": True, "headline": headline, "source": base_url}
+                news_data = {"breaking_news": True, "headline": headline, "source": "CNN Philippines", "source url": base_url}
 
                 mapped_news_data = self.news_mapper(news_data)
-                temp.append(mapped_news_data)
+                breaking_news_headlines.append(mapped_news_data)
 
             if len(self.breaking_news_update) <= 0:
-                self.news.extend(temp)
-                self.breaking_news_update.extend(temp)
+                self.news.extend(breaking_news_headlines)
+                self.breaking_news_update.extend(breaking_news_headlines)
 
         except:
-            print("Scraping failed. Can't get breaking news..")
+            # print("Scraping failed. Can't get breaking news..")
+            pass
 
     def scrape_latest_news(self, cnn_soup, base_url):
         try:
@@ -102,13 +119,13 @@ class NewsTicker:
 
             for elem in cnn_latest:
                 headline = elem.find("h4").find("a").text.strip()
-                link = base_url + elem.find("h4").find("a")["href"]
+                source_url = base_url + elem.find("h4").find("a")["href"]
                 
                 paragraphs = elem.find_all("p")
                 time_stamp = paragraphs[0].text.strip()
                 story = paragraphs[1].text.strip()
 
-                news_data = {"headline": headline, "source": link, "time": time_stamp, "story": story}
+                news_data = {"headline": headline, "source": "CNN Philippines", "source url": source_url, "time": time_stamp, "story": story}
                 self.news.append(self.news_mapper(news_data))
 
                 # print(f"{headline} ({time_stamp}) \n {link}", end="\n\n")
@@ -116,15 +133,38 @@ class NewsTicker:
             # https://www.manilatimes.net/news/latest-stories/breakingnews/
 
         except:
-            print("Scraping failed. Can't get latest news..")
+            # print("Scraping failed. Can't get latest news..")
+            pass
 
-    def get_news(self):
+    def cast_latest_news(self):
+        cast_news = []
+
         if len(self.news) < 1:
             # return immediately if no list of headlines to show
             print("\n **No new headlines found.")
             return list()
         
-        return self.news
+        for news in self.news:
+            headline = news["headline"].replace("<ap>", "'").strip()
+            report = f"From {news['source']}, ({news['time']}).\n\n{headline}."
+            cast_news.append(report)
+        
+        return cast_news
+
+    def cast_breaking_news(self):
+        cast_news = []
+
+        if len(self.breaking_news_update) < 1:
+            # return immediately if no list of headlines to show
+            print("\n **No new breaking news found.")
+            return list()
+
+        for news in self.breaking_news_update:
+            headline = news["headline"].replace("<ap>", "'").strip()
+            report = f"From {news['source']}, ({news['time']}).\n\n{headline}."
+            cast_news.append(report)
+        
+        return cast_news
 
     def connect(self):
         cnn_soup = None
@@ -147,7 +187,7 @@ class NewsTicker:
         cnn_soup = None
         cnn_url = ""
 
-        print("\n Fetching news from internet...")
+        print("\n Fetching information from news channels...")
         cnn_soup, cnn_url = self.connect()
 
         # scrape news from various websites
@@ -170,7 +210,7 @@ class NewsTicker:
 
         headline = "{} {} ".format(title_color, news["headline"].replace("<ap>", "'"))
         story = "{} {} ".format(color_reset, news["story"])
-        source = "{} {}".format(source_color, news["source"].replace("<ap>", "'"))
+        source = "{} {}".format(source_color, news["source url"].replace("<ap>", "'"))
 
         print(headline)
         print("{}more on{}".format(story, source), "\n")
@@ -184,18 +224,13 @@ class NewsTicker:
             print("\n **No new headlines found.")
             return
 
-        # daemon thread to check breaking news from time to time
-        breaking_news_thread = Thread(target=self.breaking_news_daemon)
-        breaking_news_thread.setDaemon(True)
-        breaking_news_thread.start()
-
         def _create_news_ticker():
             news_list = self.news
             
             isBreakingNews = False
             window_height = 90
 
-            if self.breaking_news_watch():
+            if self.check_breaking_news():
                 window_height = "110 /top"
                 news_list = self.breaking_news_update
                 isBreakingNews = True
@@ -228,12 +263,23 @@ class NewsTicker:
                 # headline is almost full row..
                 if len(ticker_detail) > 168:
                     
-                    if "." in ticker_detail:
-                        # let's break it into separate sentences.
+                    if "." in ticker_detail and ticker_detail.count(".") > 1:
+                        # let's break it into separate sentence/paragraph.
                         for sentence in ticker_detail.split("."):
                             sentence = f"{sentence}.".center(168)
                             size = len(sentence)
                             print(f"{sentence[counter:(size + counter)] + sentence[0:counter]}")
+                    else:
+                        words = ticker_detail.split(" ")
+                        half = (len(words) // 2)
+                        
+                        sentence = f"{' '.join(words[:half])}".center(168)
+                        size = len(sentence)
+                        print(f"{sentence[counter:(size + counter)] + sentence[0:counter]}")
+
+                        sentence = f"{' '.join(words[half:])}.".center(168)
+                        size = len(sentence)
+                        print(f"{sentence[counter:(size + counter)] + sentence[0:counter]}")
                 
                 else:
                     # show the headline news
@@ -254,7 +300,7 @@ class NewsTicker:
         print("\n")
 
         while True:
-            if self.breaking_news_watch():
+            if self.check_breaking_news():
                 # priority ticker for BREAKING NEWS
                 for idx, breakingnews in enumerate(self.breaking_news_update):
                     news_idx = idx + 1
@@ -275,7 +321,7 @@ class NewsTicker:
                     current_news = news
 
                     # halt news watch ticker and display the breaking news
-                    if self.breaking_news_watch():
+                    if self.check_breaking_news():
                         break
 
                     if isBanner:
@@ -294,6 +340,7 @@ if __name__ == "__main__":
         os.system("cls")
         try:
             news.fetch_news()
+            news.run_breaking_news_daemon()
             news.show_news(False)
 
         except KeyboardInterrupt:
