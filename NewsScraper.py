@@ -68,7 +68,12 @@ def convert_time_stamp_to_datetime(time_stamp):
         hour = current_date_time.hour
         minute = current_date_time.minute
 
-        value = int([number for number in time_stamp.split(" ") if number.isdigit()][0])
+        extract_numeric_value = [number for number in time_stamp.split(" ") if number.isdigit()]
+
+        if len(extract_numeric_value) > 0:
+            value = int(extract_numeric_value[0])
+        else:
+            value = 0
 
         if "mins" in time_stamp:
             if value <= 0:
