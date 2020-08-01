@@ -13,6 +13,7 @@ import time
 from dateutil import tz
 
 
+NEWS_SCRAPER_MODULE_DIR = "C:\\Users\\Dave\\DEVENV\\Python\\NewsScraper"
 SPACE_ALIGNMENT = 100
 TIME_FOR_BREAKING_NEWS = 60  # 1 min
 
@@ -93,7 +94,7 @@ def convert_time_stamp_to_datetime(time_stamp):
 
     except Exception:
         pass
-        displayException("Time stamp to date/time conversion error.", logging.ERROR)
+        displayException("Time stamp to date/time conversion error.")
         return current_date_time.strftime("%A, %d %b %Y %I:%M %p")
 
 
@@ -121,7 +122,7 @@ def convert_datetime_to_time_stamp(date_time):
 
     except Exception:
         pass
-        displayException("Date/Time to Time stamp conversion error.", logging.ERROR)
+        displayException("Date/Time to Time stamp conversion error.")
         return "about a moment ago"
 
 
@@ -235,7 +236,7 @@ class NewsParser():
 
         except Exception:
             pass
-            displayException("Error while parsing rss feed.", logging.ERROR)
+            displayException("Error while parsing rss feed.")
 
         return self.parsed_news
 
@@ -251,7 +252,7 @@ class NewsParser():
 
         except Exception:
             pass
-            displayException("Error while parsing html.", logging.ERROR)
+            displayException("Error while parsing html.")
 
         return self.parsed_news
 
@@ -263,7 +264,7 @@ class NewsTicker:
         self.news = []
         self.breaking_news_update = []
         self.changed_news_count = 0
-        self.news_file = f"News-{date_now}.json"
+        self.news_file = f"{NEWS_SCRAPER_MODULE_DIR}\\News-{date_now}.json"
 
     def count_news(self):
         return len(self.news)
@@ -333,12 +334,12 @@ class NewsTicker:
                     }
                     # if we don't have yet this headline, then append it to a temporary list of headlines
                     # if not (headline.lower() in [news["headline"].lower() for news in self.breaking_news_update]) and not (headline.lower() in [news["headline"].lower() for news in self.news]):
-                    if not is_match(headline, [latest_news["headline"] for latest_news in self.breaking_news_update]) and not is_match(headline, [news["headline"] for news in self.news]):
+                    if headline and not is_match(headline, [latest_news["headline"] for latest_news in self.breaking_news_update]) and not is_match(headline, [news["headline"] for news in self.news]):
                         breaking_news_headlines.append(news_mapper(news_data))
 
         except Exception:
             pass
-            displayException("Error while scraping CNN Latest Breaking News.", logging.ERROR)
+            displayException("Error while scraping CNN Latest Breaking News.")
 
         return breaking_news_headlines
 
@@ -369,35 +370,36 @@ class NewsTicker:
                             headline = ""
                             source = ""
                             publ_date = ""
+
                             if teaser:
                                 headline = teaser[0].find("h1")
+
                                 if headline:
                                     headline = headline.text.strip()
+                                    source = teaser[0].find("div", {"class": "author-byline"})
+                                    if source:
+                                        source = source.text.strip()
 
-                                source = teaser[0].find("div", {"class": "author-byline"})
-                                if source:
-                                    source = source.text.strip()
+                                    publ_date = teaser[0].find("div", {"class": "dateLine"})
+                                    if publ_date:
+                                        publ_date = publ_date.text.replace("Published", "").strip()
+                                        publ_date = dt.strptime(publ_date, "%b %d, %Y %I:%M:%S %p").strftime("%A, %d %b %Y %I:%M %p")
 
-                                publ_date = teaser[0].find("div", {"class": "dateLine"})
-                                if publ_date:
-                                    publ_date = publ_date.text.replace("Published", "").strip()
-                                    publ_date = dt.strptime(publ_date, "%b %d, %Y %I:%M:%S %p").strftime("%A, %d %b %Y %I:%M %p")
-
-                                news_data = {
-                                    "breaking_news": "true",
-                                    "headline": headline,
-                                    "time": publ_date,
-                                    "source": source,
-                                    "source url": source_link
-                                }
+                                    news_data = {
+                                        "breaking_news": "true",
+                                        "headline": headline,
+                                        "time": publ_date,
+                                        "source": source,
+                                        "source url": source_link
+                                    }
 
                                 # if we don't have yet this headline, then append it to a temporary list of headlines
                                 # if not (headline.lower() in [news["headline"].lower() for news in self.breaking_news_update]) and not (headline.lower() in [news["headline"].lower() for news in self.news]):
-                                if not is_match(headline, [latest_news["headline"] for latest_news in self.breaking_news_update]) and not is_match(headline, [news["headline"] for news in self.news]):
+                                if headline and not is_match(headline, [latest_news["headline"] for latest_news in self.breaking_news_update]) and not is_match(headline, [news["headline"] for news in self.news]):
                                     breaking_news_headlines.append(news_mapper(news_data))
         except Exception:
             pass
-            displayException("Error while scraping CNN Breaking News Subhead.", logging.ERROR)
+            displayException("Error while scraping CNN Breaking News Subhead.")
 
         return breaking_news_headlines
 
@@ -444,7 +446,7 @@ class NewsTicker:
 
         except Exception:
             pass
-            displayException("CNN latest news website is not in correct format.", logging.ERROR)
+            displayException("CNN latest news website is not in correct format.")
 
         return latest_news
 
@@ -456,7 +458,7 @@ class NewsTicker:
 
         except Exception:
             pass
-            displayException("Google News Feed is not in correct format.", logging.ERROR)
+            displayException("Google News Feed is not in correct format.")
 
         return latest_news_feed
 
@@ -475,19 +477,21 @@ class NewsTicker:
 
             for news in self.get_news():
                 headline = news["headline"].strip()
+                source = news['source'].strip()
                 time_stamp = convert_datetime_to_time_stamp(news['time'])
 
-                report = f"From {news['source']}, ({time_stamp}).\n {headline}."
+                report = f"From {source}, ({time_stamp}).\n {headline}."
 
-                if meta_data:
+                if headline and meta_data:
                     # filter news report using meta_data keyword found in "headline" and "story" section
-                    if is_match(meta_data, report.split(" ")):
+                    if is_match(meta_data, (headline.split(" ") + source.split(" "))):
                         cast_news.append({"report": report, "source url": news["source url"]})
-                else:
+                elif headline:
                     cast_news.append({"report": report, "source url": news["source url"]})
 
         except Exception:
-            displayException("Error occurred while casting latest news.", logging.ERROR)
+            pass
+            displayException("Error occurred while casting latest news.")
 
         return cast_news
 
@@ -502,19 +506,22 @@ class NewsTicker:
 
             for news in self.breaking_news_update:
                 headline = news["headline"].strip()
+                source = news['source']
                 time_stamp = convert_datetime_to_time_stamp(news["time"])
 
-                source = news['source']
                 report = f"From {source}, ({time_stamp}).\n {headline}."
 
                 # Author is present in source, let's remove the "From" prefix of our report
                 if "By " in source:
                     report = report.replace("From ", "")
 
-                cast_news.append(report)
+                # make sure the headline is not blank when we add it on the list
+                if headline:
+                    cast_news.append(report)
 
         except Exception:
-            displayException("Error occurred while casting breaking news.", logging.ERROR)
+            pass
+            displayException("Error occurred while casting breaking news.")
 
         return cast_news
 
@@ -549,21 +556,25 @@ class NewsTicker:
             displayException("Error occurred while fetching news.", logging.CRITICAL)
 
     def load_news_from_json(self):
-        date_now = dt.now().strftime("%A, %d %b %Y")
+        try:
+            date_now = dt.now().strftime("%A, %d %b %Y")
 
-        if self.count_news() == 0 and os.path.isfile(self.news_file):
-            # create the list of news as json type file
-            with open(self.news_file, "r", encoding="utf-8") as fw:
-                news = json.load(fw)
-                self.news = [news for news in news["news"] if dt.strptime(news["time"], "%A, %d %b %Y %I:%M %p").strftime("%A, %d %b %Y") == date_now]
-                # let's remember the number of news from json that we loaded.
-                # this will be our reference if there are changes/additional news where discovered/scraped
-                self.changed_news_count = self.count_news()
+            if self.count_news() == 0 and os.path.isfile(self.news_file):
+                # create the list of news as json type file
+                with open(self.news_file, "r", encoding="utf-8") as fw:
+                    news = json.load(fw)
+                    self.news = [news for news in news["news"] if dt.strptime(news["time"], "%A, %d %b %Y %I:%M %p").strftime("%A, %d %b %Y") == date_now]
+                    # let's remember the number of news from json that we loaded.
+                    # this will be our reference if there are changes/additional news where discovered/scraped
+                    self.changed_news_count = self.count_news()
 
-            for breaking_news in self.news:
-                # if we don't have yet this headline, then append it to a temporary list of headlines
-                if breaking_news["breaking_news"] == "true" and dt.strptime(breaking_news["time"], "%A, %d %b %Y %I:%M %p").strftime("%A, %d %b %Y") == date_now and not any(breaking_news["headline"] in news["headline"].lower() for news in self.breaking_news_update):
-                    self.breaking_news_update.append(breaking_news)
+                for breaking_news in self.news:
+                    # if we don't have yet this headline, then append it to a temporary list of headlines
+                    if breaking_news["breaking_news"] == "true" and dt.strptime(breaking_news["time"], "%A, %d %b %Y %I:%M %p").strftime("%A, %d %b %Y") == date_now and not any(breaking_news["headline"] in news["headline"].lower() for news in self.breaking_news_update):
+                        self.breaking_news_update.append(breaking_news)
+        except Exception as ex:
+            pass
+            displayException("Error occurred while loading news from file.", logging.CRITICAL)
 
     def create_news_banner(self, news):
         title_color = "\033[2;30;47m"
@@ -696,11 +707,12 @@ if __name__ == "__main__":
             news.show_news(False)
 
         except KeyboardInterrupt:
+            pass
             displayException("Keyboard Interrupt", ex_type=logging.DEBUG)
             break
         except Exception:
             pass
-            displayException("Main Exception", logging.CRITICAL)
+            displayException("NewsTicker Main Exception")
             print(" Trying to re-connect...")
 
         time.sleep(5)
