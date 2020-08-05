@@ -17,23 +17,22 @@ NEWS_SCRAPER_MODULE_DIR = "C:\\Users\\Dave\\DEVENV\\Python\\NewsScraper"
 SPACE_ALIGNMENT = 100
 TIME_FOR_BREAKING_NEWS = 60  # 1 min
 
-logging.basicConfig(filename="NewsScraper.log", filemode="w", level=logging.ERROR, format="%(asctime)s; %(levelname)s; %(message)s")
-# logging.Formatter("%(asctime)s; %(levelname)s; %(message)s", "%m-%d-Y %I:%M:%S")
-
+logging.basicConfig(filename="NewsScraper.log", filemode="a", level=logging.ERROR, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s", datefmt='%m-%d-%Y %I:%M:%S %p')
 logger = logging.getLogger(__name__)
-logger.addHandler(logging.NullHandler())
 
 
-def displayException(exception_title="", ex_type=logging.CRITICAL):
+def displayException(exception_title="", ex_type=logging.ERROR):
     (execution_type, message, tb) = sys.exc_info()
 
     f = tb.tb_frame
     lineno = tb.tb_lineno
-    fname = f.f_code.co_filename
+    fname = f.f_code.co_filename.split("\\")[-1]
     linecache.checkcache(fname)
     target = linecache.getline(fname, lineno, f.f_globals)
-    # line_len = len(str(message)) + 10
-    log_data = "{}\nFile:  {}\nTarget:  {}\nMessage: {}\nLine:    {}".format(fname, exception_title, target.strip(), message, lineno)
+
+    line_len = len(str(message)) + 10
+    log_data = f"{exception_title}\n{'File:'.ljust(9)}{fname}\n{'Target:'.ljust(9)}{target.strip()}\n{'Message:'.ljust(9)}{message}\n{'Line:'.ljust(9)}{lineno}\n"
+    log_data += ("-" * line_len)
 
     if ex_type == logging.ERROR or ex_type == logging.CRITICAL:
         print("-" * 23)
@@ -87,7 +86,7 @@ def convert_time_stamp_to_datetime(time_stamp):
             else:
                 return (current_date_time - timedelta(hours=value)).strftime("%A, %d %b %Y %I:%M %p")
         else:  # day
-            if value <= 0:
+            if value <= 0 or (day - value) <= 0:
                 return (current_date_time - timedelta(hours=23, minutes=59)).strftime("%A, %d %b %Y %I:%M %p")
             else:
                 return dt(year, month, (day - value), hour, minute).strftime("%A, %d %b %Y %I:%M %p")
@@ -235,8 +234,7 @@ class NewsParser():
                 self.parsed_news.append(news_mapper(news_data))
 
         except Exception:
-            pass
-            displayException("Error while parsing rss feed.")
+            displayException("Error occurred while parsing rss feed.")
 
         return self.parsed_news
 
@@ -251,8 +249,7 @@ class NewsParser():
             return soup.find_all(*xpath)
 
         except Exception:
-            pass
-            displayException("Error while parsing html.")
+            displayException("Error occurred while parsing html.")
 
         return self.parsed_news
 
@@ -260,11 +257,10 @@ class NewsParser():
 class NewsTicker:
 
     def __init__(self):
-        date_now = dt.now().strftime('%A, %d %b %Y')
         self.news = []
         self.breaking_news_update = []
         self.changed_news_count = 0
-        self.news_file = f"{NEWS_SCRAPER_MODULE_DIR}\\News-{date_now}.json"
+        self.news_file = ""
 
     def count_news(self):
         return len(self.news)
@@ -333,13 +329,12 @@ class NewsTicker:
                         "source url": base_url
                     }
                     # if we don't have yet this headline, then append it to a temporary list of headlines
-                    # if not (headline.lower() in [news["headline"].lower() for news in self.breaking_news_update]) and not (headline.lower() in [news["headline"].lower() for news in self.news]):
                     if headline and not is_match(headline, [latest_news["headline"] for latest_news in self.breaking_news_update]) and not is_match(headline, [news["headline"] for news in self.news]):
                         breaking_news_headlines.append(news_mapper(news_data))
 
         except Exception:
             pass
-            displayException("Error while scraping CNN Latest Breaking News.")
+            displayException("Error occurred while scraping CNN Latest Breaking News.")
 
         return breaking_news_headlines
 
@@ -394,12 +389,11 @@ class NewsTicker:
                                     }
 
                                 # if we don't have yet this headline, then append it to a temporary list of headlines
-                                # if not (headline.lower() in [news["headline"].lower() for news in self.breaking_news_update]) and not (headline.lower() in [news["headline"].lower() for news in self.news]):
                                 if headline and not is_match(headline, [latest_news["headline"] for latest_news in self.breaking_news_update]) and not is_match(headline, [news["headline"] for news in self.news]):
                                     breaking_news_headlines.append(news_mapper(news_data))
         except Exception:
             pass
-            displayException("Error while scraping CNN Breaking News Subhead.")
+            displayException("Error occurred while scraping CNN Breaking News Subhead.")
 
         return breaking_news_headlines
 
@@ -414,7 +408,6 @@ class NewsTicker:
 
         for news in consolidated:
             # if we don't have yet this headline, then append it to a temporary list of headlines
-            # if not any(news["headline"].lower() in latest_news["headline"].lower() for latest_news in self.news):
             if not is_match(news["headline"], [latest_news["headline"] for latest_news in self.news]):
                 self.news.append(news)
 
@@ -495,16 +488,19 @@ class NewsTicker:
 
         return cast_news
 
-    def cast_breaking_news(self):
+    def cast_breaking_news(self, on_demand=False):
         cast_news = []
+        news_updates = self.breaking_news_update
 
         try:
-            if len(self.breaking_news_update) < 1:
+            if len(news_updates) < 1 and not on_demand:
                 # return immediately if no list of headlines to show
                 print("\n **No new breaking news found.")
                 return list()
+            elif on_demand and len(news_updates) < 1:
+                news_updates = [bnews for bnews in self.get_news() if bnews["breaking_news"].lower() == "true"]
 
-            for news in self.breaking_news_update:
+            for news in news_updates:
                 headline = news["headline"].strip()
                 source = news['source']
                 time_stamp = convert_datetime_to_time_stamp(news["time"])
@@ -517,7 +513,8 @@ class NewsTicker:
 
                 # make sure the headline is not blank when we add it on the list
                 if headline:
-                    cast_news.append(report)
+                    # cast_news.append(report)
+                    cast_news.append({"report": report, "source url": news["source url"]})
 
         except Exception:
             pass
@@ -526,6 +523,9 @@ class NewsTicker:
         return cast_news
 
     def fetch_news(self, news_file=""):
+        date_now = dt.now().strftime('%A, %d %b %Y')
+        self.news_file = f"{NEWS_SCRAPER_MODULE_DIR}\\News-{date_now}.json"
+
         if news_file:
             self.news_file = news_file
 
@@ -568,13 +568,13 @@ class NewsTicker:
                     # this will be our reference if there are changes/additional news where discovered/scraped
                     self.changed_news_count = self.count_news()
 
-                for breaking_news in self.news:
-                    # if we don't have yet this headline, then append it to a temporary list of headlines
-                    if breaking_news["breaking_news"] == "true" and dt.strptime(breaking_news["time"], "%A, %d %b %Y %I:%M %p").strftime("%A, %d %b %Y") == date_now and not any(breaking_news["headline"] in news["headline"].lower() for news in self.breaking_news_update):
-                        self.breaking_news_update.append(breaking_news)
-        except Exception as ex:
+                # for breaking_news in self.news:
+                #     # if we don't have yet this headline, then append it to a temporary list of headlines
+                #     if breaking_news["breaking_news"] == "true" and dt.strptime(breaking_news["time"], "%A, %d %b %Y %I:%M %p").strftime("%A, %d %b %Y") == date_now and not any(breaking_news["headline"] in news["headline"].lower() for news in self.breaking_news_update):
+                #         self.breaking_news_update.append(breaking_news)
+        except Exception:
             pass
-            displayException("Error occurred while loading news from file.", logging.CRITICAL)
+            displayException("Error occurred while loading news from file.")
 
     def create_news_banner(self, news):
         title_color = "\033[2;30;47m"
@@ -690,7 +690,7 @@ class NewsTicker:
                     _create_news_ticker()
 
             os.system("cls")
-            print("\nFetching information from news channels...")
+            print("\n Fetching information from news channels...", end="")
             self.fetch_news()
             self.show_news(isBanner)
 
@@ -701,7 +701,7 @@ if __name__ == "__main__":
     while True:
         os.system("cls")
         try:
-            print("\nFetching information from news channels...")
+            print("\n Fetching information from news channels...", end="")
             news.fetch_news()
             news.run_breaking_news_daemon()
             news.show_news(False)

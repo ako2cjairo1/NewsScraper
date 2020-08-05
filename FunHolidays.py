@@ -32,15 +32,15 @@ class FunHoliday:
         }
 
         temp_date = date.split(" ")
-        day = temp_date[0]
+        day = temp_date[0].zfill(2)
         month_name = temp_date[1]
 
         translation = swither.get(month_name, "")
-        converted_month_name = date.replace(month_name, translation)
+        converted_month_name = f"{day} {translation}"  # date.replace(month_name, translation)
         return converted_month_name
 
     def get_fun_holiday(self):
-        fun_holiday_result = {"success": "false"}
+        fun_holiday_result = {"success": "false", "holiday": list()}
         date_now = dt.now().strftime("%d %b")
 
         try:
@@ -72,11 +72,10 @@ class FunHoliday:
                         # this will be the "did you know" content
                         did_you_know = ""
                         for item in paragraph_tag:
-                            if "…" in item.text:
+                            if "…" in item.text or "..." in item.text:
                                 did_you_know = item.text
                                 break
 
-                        # print(f"Date: {convert_to_eng_month_name(date)}\nTitle: {holiday_name}\nHeading: {main_heading}\nDid You Know? {did_you_know}\nURL: {source_url}")
                         holiday = {
                             "date": self.convert_to_eng_month_name(date),
                             "title": holiday_name,
@@ -89,17 +88,14 @@ class FunHoliday:
             return fun_holiday_result
 
         except Exception as ex:
-            return fun_holiday_result
+            return {"success": "false", "message": str(ex)}
 
 
 if __name__ == "__main__":
     fh = FunHoliday()
-    # holiday = hol.get_fun_holiday()
-    # if holiday["success"] == "true":
-    #     holiday = holiday["holiday"]
-    #     print(f'Date: {holiday["date"]}\nTitle: {holiday["title"]}\nHeading: {holiday["heading"]}\nDid You Know? {holiday["did you know"]}\nURL: {holiday["source url"]}')
-
+    
     result = fh.get_fun_holiday()
+
     if result["success"] == "true":
         holiday = result["holiday"]
 
