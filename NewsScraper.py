@@ -10,12 +10,9 @@ from bs4 import BeautifulSoup
 from colorama import init
 from threading import Thread
 import time
+import tweepy
 from dateutil import tz
-
-
-NEWS_SCRAPER_MODULE_DIR = "C:\\Users\\Dave\\DEVENV\\Python\\NewsScraper"
-SPACE_ALIGNMENT = 100
-TIME_FOR_BREAKING_NEWS = 60  # 1 min
+from decouple import config
 
 logging.basicConfig(filename="NewsScraper.log", filemode="a", level=logging.ERROR, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s", datefmt='%m-%d-%Y %I:%M:%S %p')
 logger = logging.getLogger(__name__)
@@ -277,7 +274,7 @@ class NewsTicker:
                 breaking_news_thread = Thread(target=self.scrape_breaking_news)
                 breaking_news_thread.setDaemon(True)
                 breaking_news_thread.start()
-                time.sleep(TIME_FOR_BREAKING_NEWS)
+                time.sleep(int(config("BREAKING_NEWS_TIMEOUT")))
 
         # daemon thread to check breaking news from time to time
         breaking_news_thread = Thread(target=_breaking_news_daemon)
@@ -299,6 +296,7 @@ class NewsTicker:
 
         breaking_news_headlines.extend(self.cnn_breaking_news_latest())
         breaking_news_headlines.extend(self.cnn_breaking_news_subhead())
+        breaking_news_headlines.extend(self.twitter_breaking_news())
 
         if len(breaking_news_headlines) > 0:
             # let's clear the contents of breaking news update list before putting the new headlines
@@ -395,6 +393,46 @@ class NewsTicker:
             pass
             displayException("Error occurred while scraping CNN Breaking News Subhead.")
 
+        return breaking_news_headlines
+
+    def twitter_breaking_news(self):
+        breaking_news_headlines = []
+        try:
+            # Creating the authentication object
+            auth = tweepy.OAuthHandler(config("CONSUMER_KEY"), config("CONSUMER_SECRET"))
+            # Setting your access token and secret
+            auth.set_access_token(config("ACCESS_TOKEN"), config("ACCESS_TOKEN_SECRET"))
+            # Creating the API object while passing in the auth information
+            api = tweepy.API(auth)
+
+            def _get_tweets(tweets):
+                today = dt.now().strftime("%A, %d %b")
+
+                for tweet in tweets:
+                    # filter tweets that was created today
+                    if ("breaking news:" in tweet.full_text.lower() or "breaking:" in tweet.full_text.lower()) and today == tweet.created_at.strftime("%A, %d %b"):
+                        headline = tweet.full_text.replace("BREAKING:", "").replace("BREAKING NEWS:", "").strip()
+
+                        news_data = {
+                            "breaking_news": "true",
+                            "headline": headline,
+                            "time": tweet.created_at.strftime("%A, %d %b %Y %I:%M %p"),
+                            "source": tweet.user.name,
+                            "source url": f"https://twitter.com/i/web/status/{tweet.id}"
+                        }
+                        # if we don't have yet this headline, then append it to a temporary list of headlines
+                        if headline and not is_match(headline, [latest_news["headline"] for latest_news in self.breaking_news_update]) and not is_match(headline, [news["headline"] for news in self.news]):
+                            breaking_news_headlines.append(news_mapper(news_data))
+
+            sources = {"BBCBreaking", "breakingnews", "breakingnalerts", "cnnbrk"}
+
+            for source in sources:
+                result = api.user_timeline(id=source, count=10, tweet_mode="extended")
+                _get_tweets(result)
+
+        except Exception:
+            pass
+            displayException("Error occurred while scraping Twitter Breaking News.")
         return breaking_news_headlines
 
     '''
@@ -524,7 +562,7 @@ class NewsTicker:
 
     def fetch_news(self, news_file=""):
         date_now = dt.now().strftime('%A, %d %b %Y')
-        self.news_file = f"{NEWS_SCRAPER_MODULE_DIR}\\News-{date_now}.json"
+        self.news_file = f"{config('NEWS_DIR')}\\News-{date_now}.json"
 
         if news_file:
             self.news_file = news_file
