@@ -64,13 +64,15 @@ class FunHoliday:
                         article = args[0].select("div", {"class": "article__body"})
 
                         # extract all paragraphs
-                        paragraph_tag = article[0].find_all("p")
+                        paragraph_tag = args[0].find_all("p")
+
                         # index 1 is expected to be the heading of article
                         main_heading = paragraph_tag[1].text
 
                         # find paragraph(s) that starts with (…)
                         # this will be the "did you know" content
                         did_you_know = ""
+
                         for item in paragraph_tag:
                             if "…" in item.text or "..." in item.text:
                                 did_you_know = item.text
@@ -93,9 +95,10 @@ class FunHoliday:
 
 if __name__ == "__main__":
     fh = FunHoliday()
-    
+
     result = fh.get_fun_holiday()
 
+    print(result)
     if result["success"] == "true":
         holiday = result["holiday"]
 

@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import requests
 import json
@@ -8,18 +9,19 @@ import linecache
 from datetime import timedelta, datetime as dt
 from bs4 import BeautifulSoup
 from colorama import init
-from threading import Thread
+from threading import Event, Thread
 import time
 import tweepy
 from dateutil import tz
 from decouple import config
 
-logging.basicConfig(filename="NewsScraper.log", filemode="a", level=logging.ERROR, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s", datefmt='%m-%d-%Y %I:%M:%S %p')
+logging.basicConfig(filename="NewsScraper.log", filemode="a", level=logging.ERROR,
+                    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s", datefmt='%m-%d-%Y %I:%M:%S %p')
 logger = logging.getLogger(__name__)
 
 
 def displayException(exception_title="", ex_type=logging.ERROR):
-    (execution_type, message, tb) = sys.exc_info()
+    (ex_type, message, tb) = sys.exc_info()
 
     f = tb.tb_frame
     lineno = tb.tb_lineno
@@ -65,7 +67,8 @@ def convert_time_stamp_to_datetime(time_stamp):
         hour = current_date_time.hour
         minute = current_date_time.minute
 
-        extract_numeric_value = [number for number in time_stamp.split(" ") if number.isdigit()]
+        extract_numeric_value = [
+            number for number in time_stamp.split(" ") if number.isdigit()]
 
         if len(extract_numeric_value) > 0:
             value = int(extract_numeric_value[0])
@@ -122,6 +125,11 @@ def convert_datetime_to_time_stamp(date_time):
         return "about a moment ago"
 
 
+def has_url(text):
+    url_pattern = re.compile(r'https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+')
+    return url_pattern.search(text) is not None
+
+
 def news_mapper(news_data):
     news = News()
 
@@ -131,7 +139,11 @@ def news_mapper(news_data):
         news.breaking = "false"
 
     try:
-        news.headline = news_data["headline"]
+        headline = news_data["headline"].replace('\"', "`")
+        headline = headline if has_url(
+            headline) else f"{headline} {news_data['source url']}"
+
+        news.headline = headline
     except:
         pass
 
@@ -153,7 +165,7 @@ def news_mapper(news_data):
         pass
 
     try:
-        news.story = news_data["story"]
+        news.story = news_data["story"].replace('\"', "`")
     except:
         pass
 
@@ -202,7 +214,7 @@ class NewsParser():
 
     def clean(self, html):
         soup = BeautifulSoup(html, "html.parser")
-        text = soup.get_text().replace("\n", " ").replace("\xa0", " ").replace("\u2013", "-").replace("View Full coverage on Google News", "")
+        text = soup.get_text().replace("View Full coverage on Google News", "")
         return text.strip()
 
     def parse_feed(self):
@@ -210,14 +222,16 @@ class NewsParser():
             feeds = feedparser.parse(self.url).entries
 
             for feed in feeds:
-                gmt_to_datetime = dt.strptime(feed.get("published", ""), "%a, %d %b %Y %H:%M:%S %Z")
+                gmt_to_datetime = dt.strptime(
+                    feed.get("published", ""), "%a, %d %b %Y %H:%M:%S %Z")
                 from_tz = gmt_to_datetime.replace(tzinfo=tz.tzutc())
                 to_tz = from_tz.astimezone(tz.tzlocal())
 
                 localTime = to_tz.strftime('%A, %d %b %Y %I:%M %p')
 
                 source = feed.get("source", "").get("title", "")
-                headline = self.clean(feed.get("title", "")).replace(f" - {source}", "")
+                headline = self.clean(feed.get("title", "")).replace(
+                    f" - {source}", "")
                 source_url = feed.get("link", "")
                 story = self.clean(feed.get("description", ""))
 
@@ -263,25 +277,36 @@ class NewsTicker:
         return len(self.news)
 
     def get_news(self):
-        # sort news by "time" (descending order - latest -> older)
-        date_time_now = dt.now().strftime("%A, %d %b %Y %I:%M %p")
-        return sorted(self.news, key=lambda feed: dt.strptime(date_time_now if feed["time"] == None else feed["time"], "%A, %d %b %Y %I:%M %p"), reverse=True)
+        try:
+            distinct_news = []
+            for news_item in self.news:
+                # remove duplicates based on headlines
+                if self.is_within_day(news_item["time"]) and news_item["headline"].lower() not in [news["headline"].lower() for news in distinct_news]:
+                    distinct_news.append(news_item)
+
+            # sort news by "time" (descending order - latest -> older)
+            date_time_now = dt.now().strftime("%A, %d %b %Y %I:%M %p")
+            return sorted(distinct_news, key=lambda feed: dt.strptime(date_time_now if feed["time"] == None else feed["time"], "%A, %d %b %Y %I:%M %p"), reverse=True)
+
+        except Exception as ex:
+            time.sleep(5)
 
     def run_breaking_news_daemon(self):
-        def _breaking_news_daemon():
-            while True:
-                # connect to CNN website
-                breaking_news_thread = Thread(target=self.scrape_breaking_news)
-                breaking_news_thread.setDaemon(True)
-                breaking_news_thread.start()
-                time.sleep(int(config("BREAKING_NEWS_TIMEOUT")))
+        def scrape_breaking_news_daemon():
+            stop_event = Event()
+            try:
+                while not stop_event.is_set():
+                    Thread(target=self.scrape_breaking_news,
+                           daemon=True).start()
+                    time.sleep(int(config("BREAKING_NEWS_TIMEOUT")))
+                    # time.sleep(3)
 
-        # daemon thread to check breaking news from time to time
-        breaking_news_thread = Thread(target=_breaking_news_daemon)
-        breaking_news_thread.setDaemon(True)
-        breaking_news_thread.start()
+            except Exception as ex:
+                stop_event.set()
 
-    def check_breaking_news(self):
+        Thread(target=scrape_breaking_news_daemon, daemon=True).start()
+
+    def is_new_breaking_news(self):
         return len(self.breaking_news_update) > 0
 
     def check_latest_news(self):
@@ -292,11 +317,17 @@ class NewsTicker:
     '''
 
     def scrape_breaking_news(self):
-        breaking_news_headlines = []
+        breaking_news = []
 
-        breaking_news_headlines.extend(self.cnn_breaking_news_latest())
-        breaking_news_headlines.extend(self.cnn_breaking_news_subhead())
-        breaking_news_headlines.extend(self.twitter_breaking_news())
+        breaking_news.extend(self.cnn_breaking_news_latest())
+        breaking_news.extend(self.cnn_breaking_news_subhead())
+        breaking_news.extend(self.twitter_breaking_news())
+
+        breaking_news_headlines = []
+        for bn in breaking_news:
+            # remove duplicates based on headlines
+            if bn["headline"].lower() not in [news["headline"].lower() for news in breaking_news_headlines]:
+                breaking_news_headlines.append(bn)
 
         if len(breaking_news_headlines) > 0:
             # let's clear the contents of breaking news update list before putting the new headlines
@@ -308,8 +339,9 @@ class NewsTicker:
         breaking_news_headlines = []
         try:
             soup = NewsParser("https://cnnphilippines.com")
-            parsed_html = soup.parse_html("div", {"class": "breaking-news-content runtext-container"})
-            base_url = soup.base_url
+            parsed_html = soup.parse_html(
+                "div", {"class": "breaking-news-content runtext-container"})
+            base_url = soup.url
 
             # we didn't get any breaking news from news channel,
             # remove values of breaking_news_update list, to flag that we don't have new breaking news
@@ -327,12 +359,13 @@ class NewsTicker:
                         "source url": base_url
                     }
                     # if we don't have yet this headline, then append it to a temporary list of headlines
-                    if headline and not is_match(headline, [latest_news["headline"] for latest_news in self.breaking_news_update]) and not is_match(headline, [news["headline"] for news in self.news]):
+                    if not any(headline.lower() in breaking_news["headline"].lower() for breaking_news in self.breaking_news_update) and not any(headline.lower() in breaking_news["headline"].lower() for breaking_news in self.news):
                         breaking_news_headlines.append(news_mapper(news_data))
 
         except Exception:
             pass
-            displayException("Error occurred while scraping CNN Latest Breaking News.")
+            displayException(
+                "Error occurred while scraping CNN Latest Breaking News.")
 
         return breaking_news_headlines
 
@@ -346,7 +379,8 @@ class NewsTicker:
 
             if teaser:
                 teaser = teaser[0]
-                breaking_news_header = teaser.find_all("h2", {"class": "subhead-lead white-font"})
+                breaking_news_header = teaser.find_all(
+                    "h2", {"class": "subhead-lead white-font"})
                 if breaking_news_header:
                     breaking_news_header = breaking_news_header[0].text
 
@@ -369,14 +403,19 @@ class NewsTicker:
 
                                 if headline:
                                     headline = headline.text.strip()
-                                    source = teaser[0].find("div", {"class": "author-byline"})
+                                    source = teaser[0].find(
+                                        "div", {"class": "author-byline"})
                                     if source:
                                         source = source.text.strip()
 
-                                    publ_date = teaser[0].find("div", {"class": "dateLine"})
+                                    publ_date = teaser[0].find(
+                                        "div", {"class": "dateLine"})
                                     if publ_date:
-                                        publ_date = publ_date.text.replace("Published", "").strip()
-                                        publ_date = dt.strptime(publ_date, "%b %d, %Y %I:%M:%S %p").strftime("%A, %d %b %Y %I:%M %p")
+                                        publ_date = publ_date.text.replace(
+                                            "Published", "").strip()
+                                        publ_date = convert_time_stamp_to_datetime(
+                                            publ_date)
+                                        # publ_date = dt.strptime(publ_date, "%b %d, %Y %I:%M:%S %p").strftime("%A, %d %b %Y %I:%M %p")
 
                                     news_data = {
                                         "breaking_news": "true",
@@ -386,53 +425,93 @@ class NewsTicker:
                                         "source url": source_link
                                     }
 
-                                # if we don't have yet this headline, then append it to a temporary list of headlines
-                                if headline and not is_match(headline, [latest_news["headline"] for latest_news in self.breaking_news_update]) and not is_match(headline, [news["headline"] for news in self.news]):
-                                    breaking_news_headlines.append(news_mapper(news_data))
+                                # # if we don't have yet this headline, then append it to a temporary list of headlines
+                                if self.is_within_day(publ_date) and not any(headline.lower() in breaking_news["headline"].lower() for breaking_news in self.breaking_news_update) and not any(headline.lower() in breaking_news["headline"].lower() for breaking_news in self.news):
+                                    breaking_news_headlines.append(
+                                        news_mapper(news_data))
         except Exception:
             pass
-            displayException("Error occurred while scraping CNN Breaking News Subhead.")
+            displayException(
+                "Error occurred while scraping CNN Breaking News Subhead.")
 
         return breaking_news_headlines
+
+    def is_within_day(self, date2):
+        try:
+            from datetime import datetime
+            if date2 == None:
+                return True
+            today = dt.now().strftime("%A, %d %b %Y %I:%M %p")
+            # convert the strings to datetime objects
+            date1 = datetime.strptime(today, "%A, %d %b %Y %I:%M %p")
+            date2 = datetime.strptime(date2, "%A, %d %b %Y %I:%M %p")
+            # compute the difference between the two dates
+            # date_diff = date1-date2
+            # convert the difference to minutes
+            # minutes = int(date_diff.total_seconds() / 60)
+
+            return True if date1.date() == date2.date() else False
+        except Exception as ex:
+            raise Exception(ex)
 
     def twitter_breaking_news(self):
         breaking_news_headlines = []
         try:
             # Creating the authentication object
-            auth = tweepy.OAuthHandler(config("CONSUMER_KEY"), config("CONSUMER_SECRET"))
+            auth = tweepy.OAuthHandler(
+                config("CONSUMER_KEY"), config("CONSUMER_SECRET"))
             # Setting your access token and secret
-            auth.set_access_token(config("ACCESS_TOKEN"), config("ACCESS_TOKEN_SECRET"))
+            auth.set_access_token(config("ACCESS_TOKEN"),
+                                  config("ACCESS_TOKEN_SECRET"))
             # Creating the API object while passing in the auth information
             api = tweepy.API(auth)
 
-            def _get_tweets(tweets):
-                today = dt.now().strftime("%A, %d %b")
-
+            def _get_tweets(tweets, isBreakingNews=False):
                 for tweet in tweets:
                     # filter tweets that was created today
-                    if ("breaking news:" in tweet.full_text.lower() or "breaking:" in tweet.full_text.lower()) and today == tweet.created_at.strftime("%A, %d %b"):
-                        headline = tweet.full_text.replace("BREAKING:", "").replace("BREAKING NEWS:", "").strip()
+                    created_at = tweet.created_at.strftime(
+                        "%A, %d %b %Y %I:%M %p")
+                    if self.is_within_day(created_at) and (isBreakingNews or ("breaking news" in tweet.full_text.lower() or "breaking:" in tweet.full_text.lower() or "just in:" in tweet.full_text.lower())):
+                        headline = tweet.full_text.replace(
+                            "BREAKING:", "").replace("BREAKING NEWS:", "").strip()
 
                         news_data = {
                             "breaking_news": "true",
                             "headline": headline,
-                            "time": tweet.created_at.strftime("%A, %d %b %Y %I:%M %p"),
+                            "time": created_at,
                             "source": tweet.user.name,
                             "source url": f"https://twitter.com/i/web/status/{tweet.id}"
                         }
+
                         # if we don't have yet this headline, then append it to a temporary list of headlines
-                        if headline and not is_match(headline, [latest_news["headline"] for latest_news in self.breaking_news_update]) and not is_match(headline, [news["headline"] for news in self.news]):
-                            breaking_news_headlines.append(news_mapper(news_data))
+                        if not any(headline.lower() in breaking_news["headline"].lower() for breaking_news in self.breaking_news_update) and not any(headline.lower() in breaking_news["headline"].lower() for breaking_news in self.news):
+                            breaking_news_headlines.append(
+                                news_mapper(news_data))
 
-            sources = {"BBCBreaking", "breakingnews", "breakingnalerts", "cnnbrk"}
+            for source in {"BBCBreaking", "breakingnews",
+                           "CNNBreaking", "cnnbrk"}:
+                try:
+                    result = api.user_timeline(
+                        id=source, count=10, tweet_mode="extended")
+                    _get_tweets(result, True)
+                except Exception:
+                    pass
+                    continue
 
-            for source in sources:
-                result = api.user_timeline(id=source, count=10, tweet_mode="extended")
-                _get_tweets(result)
+            for source in {"CNN", "NBCNews", "ABC", "CBSNews", "FoxNews", "nytimes", "washingtonpost", "Reuters", "AP",
+                           "ABSCBNNews", "gmanews", "philstar", "inquirerdotnet", "rapplerdotcom", "cnnphilippines", "inquirerdotnet", "bworldph"}:
+                try:
+                    # if api.get_user(source).verified:
+                    result = api.user_timeline(
+                        id=source, count=20, tweet_mode="extended")
+                    _get_tweets(result)
+                except Exception:
+                    pass
+                    continue
 
         except Exception:
             pass
-            displayException("Error occurred while scraping Twitter Breaking News.")
+            print("Error occurred while scraping Twitter Breaking News.")
         return breaking_news_headlines
 
     '''
@@ -440,14 +519,12 @@ class NewsTicker:
     '''
 
     def scrape_latest_news(self):
-        consolidated = []
-        consolidated.extend(self.cnn_news_latest())
-        consolidated.extend(self.google_news_latest())
+        latest_news = []
+        latest_news.extend(self.cnn_news_latest())
+        latest_news.extend(self.google_news_latest())
 
-        for news in consolidated:
-            # if we don't have yet this headline, then append it to a temporary list of headlines
-            if not is_match(news["headline"], [latest_news["headline"] for latest_news in self.news]):
-                self.news.append(news)
+        for news_item in latest_news:
+            self.news.append(news_item)
 
     def cnn_news_latest(self):
         latest_news = []
@@ -457,34 +534,42 @@ class NewsTicker:
             base_url = soup.base_url
 
             for elem in parsed_html:
-                headline = elem.find("h4").find("a").text.replace("\xa0", " ").strip()
+                headline = elem.find("h4").find(
+                    "a").text.replace("\xa0", " ").strip()
 
                 # don't append if we already have this headline in the list
                 if not any(headline.lower() in hl["headline"].lower() for hl in self.news):
                     paragraphs = elem.find_all("p")
-                    time_stamp = convert_time_stamp_to_datetime(paragraphs[0].text.strip())
-                    source_url = base_url + elem.find("h4").find("a")["href"]
-                    story = paragraphs[1].text.strip()
+                    time_stamp = convert_time_stamp_to_datetime(
+                        paragraphs[0].text.strip())
 
-                    news_data = {
-                        "headline": headline,
-                        "time": time_stamp,
-                        "source": "CNN Philippines",
-                        "source url": source_url,
-                        "story": story
-                    }
-                    latest_news.append(news_mapper(news_data))
+                    # check if the news time is within 24hrs
+                    if self.is_within_day(time_stamp):
+                        source_url = base_url + \
+                            elem.find("h4").find("a")["href"]
+                        story = paragraphs[1].text.strip()
+
+                        news_data = {
+                            "headline": headline,
+                            "time": time_stamp,
+                            "source": "CNN Philippines",
+                            "source url": source_url,
+                            "story": story
+                        }
+                        latest_news.append(news_mapper(news_data))
 
         except Exception:
             pass
-            displayException("CNN latest news website is not in correct format.")
+            displayException(
+                "CNN latest news website is not in correct format.")
 
         return latest_news
 
     def google_news_latest(self):
         latest_news_feed = []
         try:
-            parser = NewsParser("https://news.google.com/rss?hl=en-PH&gl=PH&ceid=PH:en")
+            parser = NewsParser(
+                "https://news.google.com/rss?hl=en-PH&gl=PH&ceid=PH:en")
             latest_news_feed = parser.parse_feed()
 
         except Exception:
@@ -507,18 +592,21 @@ class NewsTicker:
                 return list()
 
             for news in self.get_news():
-                headline = news["headline"].strip()
-                source = news['source'].strip()
+                headline = news["headline"]
+                source = news['source']
+                is_breaking = news['breaking_news']
                 time_stamp = convert_datetime_to_time_stamp(news['time'])
 
-                report = f"From {source}, ({time_stamp}).\n {headline}."
+                report = f"From {source} ({time_stamp}).\n\n{headline}."
 
                 if headline and meta_data:
                     # filter news report using meta_data keyword found in "headline" and "story" section
-                    if is_match(meta_data, (headline.split(" ") + source.split(" "))):
-                        cast_news.append({"report": report, "source url": news["source url"]})
+                    if is_match(meta_data.lower(), (headline.split(" ") + source.split(" "))):
+                        cast_news.append(
+                            {"headline": headline, "report": report, "breaking_news": is_breaking, "source url": news["source url"]})
                 elif headline:
-                    cast_news.append({"report": report, "source url": news["source url"]})
+                    cast_news.append(
+                        {"headline": headline, "report": report, "breaking_news": is_breaking, "source url": news["source url"]})
 
         except Exception:
             pass
@@ -529,21 +617,23 @@ class NewsTicker:
     def cast_breaking_news(self, on_demand=False):
         cast_news = []
         news_updates = self.breaking_news_update
+        newsLength = len(news_updates)
 
         try:
-            if len(news_updates) < 1 and not on_demand:
+            if newsLength < 1 and not on_demand:
                 # return immediately if no list of headlines to show
                 print("\n **No new breaking news found.")
                 return list()
-            elif on_demand and len(news_updates) < 1:
-                news_updates = [bnews for bnews in self.get_news() if bnews["breaking_news"].lower() == "true"]
+            elif on_demand:
+                news_updates = [news for news in self.get_news(
+                ) if news["breaking_news"].lower() == "true"]
 
             for news in news_updates:
                 headline = news["headline"].strip()
                 source = news['source']
                 time_stamp = convert_datetime_to_time_stamp(news["time"])
 
-                report = f"From {source}, ({time_stamp}).\n {headline}."
+                report = f"From {source} ({time_stamp}).\n\n{headline}."
 
                 # Author is present in source, let's remove the "From" prefix of our report
                 if "By " in source:
@@ -552,7 +642,8 @@ class NewsTicker:
                 # make sure the headline is not blank when we add it on the list
                 if headline:
                     # cast_news.append(report)
-                    cast_news.append({"report": report, "source url": news["source url"]})
+                    cast_news.append(
+                        {"headline": headline, "report": report, "source url": news["source url"]})
 
         except Exception:
             pass
@@ -562,7 +653,7 @@ class NewsTicker:
 
     def fetch_news(self, news_file=""):
         date_now = dt.now().strftime('%A, %d %b %Y')
-        self.news_file = f"{config('NEWS_DIR')}\\News-{date_now}.json"
+        self.news_file = f"{config('NEWS_DIR')}/News-{date_now}.json"
 
         if news_file:
             self.news_file = news_file
@@ -574,7 +665,8 @@ class NewsTicker:
                     news = {
                         "news": self.get_news()
                     }
-                    fw.write(json.dumps(news, indent=4, sort_keys=True))
+                    fw.write(json.dumps(news, indent=4,
+                             sort_keys=True, ensure_ascii=False))
 
             self.load_news_from_json()
             # scrape news from various websites
@@ -591,7 +683,8 @@ class NewsTicker:
 
         except Exception:
             pass
-            displayException("Error occurred while fetching news.", logging.CRITICAL)
+            displayException(
+                "Error occurred while fetching news.", logging.CRITICAL)
 
     def load_news_from_json(self):
         try:
@@ -601,7 +694,8 @@ class NewsTicker:
                 # create the list of news as json type file
                 with open(self.news_file, "r", encoding="utf-8") as fw:
                     news = json.load(fw)
-                    self.news = [news for news in news["news"] if dt.strptime(news["time"], "%A, %d %b %Y %I:%M %p").strftime("%A, %d %b %Y") == date_now]
+                    self.news = [news for news in news["news"] if dt.strptime(
+                        news["time"], "%A, %d %b %Y %I:%M %p").strftime("%A, %d %b %Y") == date_now]
                     # let's remember the number of news from json that we loaded.
                     # this will be our reference if there are changes/additional news where discovered/scraped
                     self.changed_news_count = self.count_news()
@@ -648,7 +742,8 @@ class NewsTicker:
                 news_list = self.breaking_news_update
                 isBreakingNews = True
 
-            os.system(f"CMDOW @ /ren \"News Watcher\" /mov 11 -31 /siz 1550 {window_height}")
+            os.system(
+                f"CMDOW @ /ren \"News Watcher\" /mov 11 -31 /siz 1550 {window_height}")
 
             breaking_red_color = "\033[1;37;41m"
             # connection_red_color = "\033[1;31;49m"
@@ -664,15 +759,17 @@ class NewsTicker:
 
             counter = 0
             while True:
-                os.system("cls")
+                os.system("clear")
 
                 counter += 2
                 # slice some parts of headline to make a scrolling effect
-                animate_ticker_details = ticker_detail[counter:(deets_length + counter)] + ticker_detail[0:counter]
+                animate_ticker_details = ticker_detail[counter:(
+                    deets_length + counter)] + ticker_detail[0:counter]
 
                 print("\n")
                 if isBreakingNews:
-                    print(f"       {breaking_red_color} * BREAKING NEWS * {color_reset}".center(180))
+                    print(
+                        f"       {breaking_red_color} * BREAKING NEWS * {color_reset}".center(180))
 
                 # headline is almost full row..
                 if len(formatted_headline) > 165:
@@ -682,11 +779,13 @@ class NewsTicker:
 
                     sentence = f"{' '.join(words[:half]).strip()}".center(168)
                     size = len(sentence)
-                    print(f"{sentence[counter:(size + counter)] + sentence[0:counter]}")
+                    print(
+                        f"{sentence[counter:(size + counter)] + sentence[0:counter]}")
 
                     sentence = f"{' '.join(words[half:]).strip()}.".center(168)
                     size = len(sentence)
-                    print(f"{sentence[counter:(size + counter)] + sentence[0:counter]}")
+                    print(
+                        f"{sentence[counter:(size + counter)] + sentence[0:counter]}")
 
                 else:
                     # show the headline news
@@ -708,7 +807,7 @@ class NewsTicker:
             for idx, news in enumerate(top_50_latest_news):
 
                 # halt "latest news" ticker and display the breaking news
-                if self.check_breaking_news() and (idx + 1) % 2 != 0:
+                if self.is_new_breaking_news() and (idx + 1) % 2 != 0:
                     for breaking_idx, breakingnews in enumerate(self.breaking_news_update):
                         news_idx = breaking_idx + 1
                         current_news = breakingnews
@@ -727,19 +826,19 @@ class NewsTicker:
                 else:
                     _create_news_ticker()
 
-            os.system("cls")
-            print("\n Fetching information from news channels...", end="")
+            os.system("clear")
+            print("\nFetching information from news channels...", end="")
             self.fetch_news()
             self.show_news(isBanner)
 
 
 if __name__ == "__main__":
     news = NewsTicker()
+    os.system("clear")
 
     while True:
-        os.system("cls")
         try:
-            print("\n Fetching information from news channels...", end="")
+            print("\nFetching information from news channels...", end="")
             news.fetch_news()
             news.run_breaking_news_daemon()
             news.show_news(False)
