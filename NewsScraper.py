@@ -140,8 +140,8 @@ def news_mapper(news_data):
 
     try:
         headline = news_data["headline"].replace('\"', "`")
-        headline = headline if has_url(
-            headline) else f"{headline} {news_data['source url']}"
+        # headline = headline if has_url(
+        #     headline) else f"{headline} {news_data['source url']}"
 
         news.headline = headline
     except:
@@ -653,7 +653,7 @@ class NewsTicker:
 
     def fetch_news(self, news_file=""):
         date_now = dt.now().strftime('%A, %d %b %Y')
-        self.news_file = f"{config('NEWS_DIR')}/News-{date_now}.json"
+        self.news_file = f"{config('NEWS_DIR')}/News/News-{date_now}.json"
 
         if news_file:
             self.news_file = news_file
