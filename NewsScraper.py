@@ -1,3 +1,4 @@
+import datetime
 import os
 import re
 import sys
@@ -15,28 +16,38 @@ import tweepy
 from dateutil import tz
 from decouple import config
 
-logging.basicConfig(filename="NewsScraper.log", filemode="a", level=logging.ERROR,
-                    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s", datefmt='%m-%d-%Y %I:%M:%S %p')
+
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+formatter = logging.Formatter(
+    "%(asctime)s | %(levelname)s | %(message)s", "%m-%d-%Y %I:%M:%S %p")
+
+file_handler = logging.FileHandler("NewsScraper.log", mode="a")
+file_handler.setFormatter(formatter)
+
+logger.addHandler(file_handler)
 
 
-def displayException(exception_title="", ex_type=logging.ERROR):
-    (ex_type, message, tb) = sys.exc_info()
+def displayException(exception_title="", ex_types=logging.ERROR):
+    log_data = ""
 
-    f = tb.tb_frame
-    lineno = tb.tb_lineno
-    fname = f.f_code.co_filename.split("\\")[-1]
-    linecache.checkcache(fname)
-    target = linecache.getline(fname, lineno, f.f_globals)
-
-    line_len = len(str(message)) + 10
-    log_data = f"{exception_title}\n{'File:'.ljust(9)}{fname}\n{'Target:'.ljust(9)}{target.strip()}\n{'Message:'.ljust(9)}{message}\n{'Line:'.ljust(9)}{lineno}\n"
-    log_data += ("-" * line_len)
-
+    ex_type = logging.INFO
     if ex_type == logging.ERROR or ex_type == logging.CRITICAL:
-        print("-" * 23)
-        print(exception_title)
-        print("-" * 23)
+        (execution_type, message, tb) = sys.exc_info()
+
+        f = tb.tb_frame
+        lineno = tb.tb_lineno
+        fname = f.f_code.co_filename.split("\\")[-1]
+        linecache.checkcache(fname)
+        target = linecache.getline(fname, lineno, f.f_globals)
+
+        line_len = len(str(message)) + 10
+        log_data = f"{exception_title}\n{'File:'.ljust(9)}{fname}\n{'Target:'.ljust(9)}{target.strip()}\n{'Message:'.ljust(9)}{message}\n{'Line:'.ljust(9)}{lineno}\n"
+        log_data += ("-" * line_len)
+
+    else:
+        log_data = exception_title
 
     if ex_type == logging.DEBUG:
         logger.debug(log_data)
@@ -49,9 +60,11 @@ def displayException(exception_title="", ex_type=logging.ERROR):
 
     elif ex_type == logging.ERROR:
         logger.error(log_data)
+        raise Exception(exception_title)
 
     elif ex_type == logging.CRITICAL:
         logger.critical(log_data)
+        raise Exception(exception_title)
 
 
 def convert_time_stamp_to_datetime(time_stamp):
@@ -139,7 +152,7 @@ def news_mapper(news_data):
         news.breaking = "false"
 
     try:
-        headline = news_data["headline"].replace('\"', "`")
+        headline = news_data["headline"].replace('\"', "").replace("`", "")
         # headline = headline if has_url(
         #     headline) else f"{headline} {news_data['source url']}"
 
@@ -165,7 +178,7 @@ def news_mapper(news_data):
         pass
 
     try:
-        news.story = news_data["story"].replace('\"', "`")
+        news.story = news_data["story"].replace('\"', "").replace("`", "")
     except:
         pass
 
@@ -222,12 +235,15 @@ class NewsParser():
             feeds = feedparser.parse(self.url).entries
 
             for feed in feeds:
-                gmt_to_datetime = dt.strptime(
-                    feed.get("published", ""), "%a, %d %b %Y %H:%M:%S %Z")
-                from_tz = gmt_to_datetime.replace(tzinfo=tz.tzutc())
-                to_tz = from_tz.astimezone(tz.tzlocal())
+                # gmt_to_datetime = dt.strptime(
+                #     feed.get("published", ""), "%a, %d %b %Y %H:%M:%S %Z")
 
-                localTime = to_tz.strftime('%A, %d %b %Y %I:%M %p')
+                # localTime = gmt_to_datetime.strftime('%A, %d %b %Y %I:%M %p')
+
+                # +8 hours
+                created_at = dt.strptime(
+                    feed.get("published", ""), "%a, %d %b %Y %H:%M:%S %Z") + timedelta(hours=8)
+                localTime = created_at.strftime("%A, %d %b %Y %I:%M %p")
 
                 source = feed.get("source", "").get("title", "")
                 headline = self.clean(feed.get("title", "")).replace(
@@ -244,8 +260,9 @@ class NewsParser():
                 }
                 self.parsed_news.append(news_mapper(news_data))
 
-        except Exception:
-            displayException("Error occurred while parsing rss feed.")
+        except Exception as ex:
+            pass
+            displayException(f"Error occurred while parsing rss feed. {ex}")
 
         return self.parsed_news
 
@@ -259,8 +276,9 @@ class NewsParser():
 
             return soup.find_all(*xpath)
 
-        except Exception:
-            displayException("Error occurred while parsing html.")
+        except Exception as ex:
+            pass
+            displayException(f"Error occurred while parsing html. {ex}")
 
         return self.parsed_news
 
@@ -345,9 +363,9 @@ class NewsTicker:
 
             # we didn't get any breaking news from news channel,
             # remove values of breaking_news_update list, to flag that we don't have new breaking news
-            if parsed_html is None:
-                self.breaking_news_update = []
-                return
+            # if parsed_html is None:
+            #     self.breaking_news_update = []
+            #     return
 
             for news in parsed_html:
                 for bn in news.find_all("a", {"class": "fancybox"}):
@@ -468,9 +486,15 @@ class NewsTicker:
 
             def _get_tweets(tweets, isBreakingNews=False):
                 for tweet in tweets:
-                    # filter tweets that was created today
                     created_at = tweet.created_at.strftime(
                         "%A, %d %b %Y %I:%M %p")
+                    # +8 hours
+                    created_at = dt.strptime(
+                        created_at, "%A, %d %b %Y %I:%M %p") + timedelta(hours=8)
+
+                    created_at = created_at.strftime("%A, %d %b %Y %I:%M %p")
+
+                    # filter tweets that was created today
                     if self.is_within_day(created_at) and (isBreakingNews or ("breaking news" in tweet.full_text.lower() or "breaking:" in tweet.full_text.lower() or "just in:" in tweet.full_text.lower())):
                         headline = tweet.full_text.replace(
                             "BREAKING:", "").replace("BREAKING NEWS:", "").strip()
@@ -495,7 +519,6 @@ class NewsTicker:
                         id=source, count=10, tweet_mode="extended")
                     _get_tweets(result, True)
                 except Exception:
-                    pass
                     continue
 
             for source in {"CNN", "NBCNews", "ABC", "CBSNews", "FoxNews", "nytimes", "washingtonpost", "Reuters", "AP",
@@ -506,7 +529,6 @@ class NewsTicker:
                         id=source, count=20, tweet_mode="extended")
                     _get_tweets(result)
                 except Exception:
-                    pass
                     continue
 
         except Exception:
@@ -558,10 +580,10 @@ class NewsTicker:
                         }
                         latest_news.append(news_mapper(news_data))
 
-        except Exception:
+        except Exception as ex:
             pass
             displayException(
-                "CNN latest news website is not in correct format.")
+                f"CNN latest news website is not in correct format. {ex}")
 
         return latest_news
 
@@ -572,9 +594,10 @@ class NewsTicker:
                 "https://news.google.com/rss?hl=en-PH&gl=PH&ceid=PH:en")
             latest_news_feed = parser.parse_feed()
 
-        except Exception:
+        except Exception as ex:
             pass
-            displayException("Google News Feed is not in correct format.")
+            displayException(
+                f"Google News Feed is not in correct format. {ex}")
 
         return latest_news_feed
 
@@ -617,16 +640,14 @@ class NewsTicker:
     def cast_breaking_news(self, on_demand=False):
         cast_news = []
         news_updates = self.breaking_news_update
-        newsLength = len(news_updates)
 
         try:
-            if newsLength < 1 and not on_demand:
-                # return immediately if no list of headlines to show
-                print("\n **No new breaking news found.")
-                return list()
-            elif on_demand:
+            if on_demand:
                 news_updates = [news for news in self.get_news(
                 ) if news["breaking_news"].lower() == "true"]
+            elif len(news_updates) < 1:
+                # return immediately if no list of headlines to show
+                return list()
 
             for news in news_updates:
                 headline = news["headline"].strip()
@@ -681,10 +702,10 @@ class NewsTicker:
                 # this will be our reference if there are changes/additional news where discovered/scraped
                 self.changed_news_count = self.count_news()
 
-        except Exception:
+        except Exception as ex:
             pass
             displayException(
-                "Error occurred while fetching news.", logging.CRITICAL)
+                f"Error occurred while fetching news. {ex}", logging.CRITICAL)
 
     def load_news_from_json(self):
         try:
