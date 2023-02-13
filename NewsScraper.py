@@ -18,7 +18,7 @@ from decouple import config
 
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
+# logger.setLevel(logging.INFO)
 
 formatter = logging.Formatter(
     "%(asctime)s | %(levelname)s | %(message)s", "%m-%d-%Y %I:%M:%S %p")
@@ -29,12 +29,12 @@ file_handler.setFormatter(formatter)
 logger.addHandler(file_handler)
 
 
-def displayException(exception_title="", ex_types=logging.ERROR):
+def displayException(exception_title="", ex_type=logging.ERROR):
     log_data = ""
 
-    ex_type = logging.INFO
+    logger.setLevel(ex_type)
     if ex_type == logging.ERROR or ex_type == logging.CRITICAL:
-        (execution_type, message, tb) = sys.exc_info()
+        (_, message, tb) = sys.exc_info()
 
         f = tb.tb_frame
         lineno = tb.tb_lineno
