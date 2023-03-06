@@ -29,7 +29,7 @@ file_handler.setFormatter(formatter)
 logger.addHandler(file_handler)
 
 
-def displayException(exception_title="", ex_type=logging.ERROR):
+def displayException(exception_title="", ex_type=logging.INFO):
     log_data = ""
 
     logger.setLevel(ex_type)
